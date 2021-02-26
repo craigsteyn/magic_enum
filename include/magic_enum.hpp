@@ -169,7 +169,7 @@ class static_string {
     assert(str.size() == N);
   }
 
-  constexpr const char* data() const noexcept { return chars_.data(); }
+  constexpr const char* data() const noexcept { return chars_; }
 
   constexpr std::size_t size() const noexcept { return N; }
 
@@ -177,9 +177,9 @@ class static_string {
 
  private:
   template <std::size_t... I>
-  constexpr static_string(string_view str, std::index_sequence<I...>) noexcept : chars_{{str[I]..., '\0'}} {}
+  constexpr static_string(string_view str, std::index_sequence<I...>) noexcept : chars_{str[I]..., '\0'} {}
 
-  const std::array<char, N + 1> chars_;
+  const char chars_[N + 1];
 };
 
 template <>
@@ -408,32 +408,38 @@ constexpr E value(std::size_t i) noexcept {
   }
 }
 
-template <std::size_t N>
-constexpr std::size_t values_count(const std::array<bool, N>& valid) noexcept {
-  auto count = std::size_t{0};
-  for (std::size_t i = 0; i < valid.size(); ++i) {
-    if (valid[i]) {
-      ++count;
-    }
-  }
+template<typename E, int Min, bool IsFlags, size_t I>
+struct valid_holder {
+  static constexpr auto stored_value = value<E, Min, IsFlags>(I);
+};
 
-  return count;
+template<typename E, bool IsFlags, int Min, size_t I>
+constexpr auto empty_or_valid_tuple_for_index() {
+  if constexpr (is_valid<E, value<E, Min, IsFlags>(I)>()) {
+    return std::tuple<valid_holder<E, Min, IsFlags, I>>{};
+  }
+  else {
+    return std::tuple<>{};
+  }
+}
+
+template<typename E, bool IsFlags, int Min, size_t... I>
+static auto make_valid_tuple() {
+  return std::tuple_cat(empty_or_valid_tuple_for_index<E, IsFlags, Min, I>()...);
+}
+template<typename E, bool IsFlags, int Min, size_t... I>
+using valid_tuple_t = decltype(make_valid_tuple<E, IsFlags, Min, I...>());
+
+template<typename E, typename TupleType, size_t... I>
+constexpr auto array_from_valid_tuple(std::index_sequence<I...>) noexcept {
+  return std::array<E, sizeof...(I)>{ std::tuple_element_t<I, TupleType>::stored_value ... };
 }
 
 template <typename E, bool IsFlags, int Min, std::size_t... I>
 constexpr auto values(std::index_sequence<I...>) noexcept {
   static_assert(is_enum_v<E>, "magic_enum::detail::values requires enum type.");
-  constexpr std::array<bool, sizeof...(I)> valid{{is_valid<E, value<E, Min, IsFlags>(I)>()...}};
-  constexpr std::size_t count = values_count(valid);
-
-  std::array<E, count> values{};
-  for (std::size_t i = 0, v = 0; v < count; ++i) {
-    if (valid[i]) {
-      values[v++] = value<E, Min, IsFlags>(i);
-    }
-  }
-
-  return values;
+  using valid_tuple = valid_tuple_t<E, IsFlags, Min, I...>;
+  return array_from_valid_tuple<E, valid_tuple>(std::make_index_sequence<std::tuple_size_v<valid_tuple>>{});
 }
 
 template <typename E, bool IsFlags, typename U = std::underlying_type_t<E>>
